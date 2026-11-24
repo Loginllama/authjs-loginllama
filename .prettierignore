@@ -1,0 +1,5 @@
+pnpm-lock.yaml
+CHANGELOG.md
+dist
+.release-please-manifest.json
+node_modules
