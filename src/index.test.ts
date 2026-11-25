@@ -5,11 +5,12 @@ import Credentials from '@auth/core/providers/credentials';
 import { withLoginLlama } from './index.ts';
 
 // Stands in for the LoginLlama API: answers with `score`, records each call.
-let score: number | 'down' = 0;
+let score: number | 'down' | 'error' = 0;
 let calls: {
   identity_key: string;
   authentication_outcome: string;
   ip_address?: string;
+  user_agent?: string;
 }[] = [];
 const realFetch = globalThis.fetch;
 let source: string | null = null;
@@ -18,6 +19,7 @@ globalThis.fetch = async (input, init) => {
     source = new Headers(init?.headers).get('x-loginllama-source');
     if (score === 'down') throw new TypeError('fetch failed');
     calls.push(JSON.parse(String(init?.body)));
+    if (score === 'error') return new Response('boom', { status: 500 });
     return Response.json({
       data: { attributes: { risk_score: score, risk_codes: [] } }
     });
@@ -26,7 +28,7 @@ globalThis.fetch = async (input, init) => {
 };
 
 const PASSWORD = 'correct-horse-battery';
-const config = {
+const makeConfig = (options = {}) => ({
   secret: 'test-secret-that-is-long-enough-for-auth-js',
   trustHost: true,
   basePath: '/auth',
@@ -36,15 +38,25 @@ const config = {
       authorize: withLoginLlama(
         ({ email, password }) =>
           password === PASSWORD ? { id: '1', email: String(email) } : null,
-        { apiKey: 'test-key' }
+        { apiKey: 'test-key', ...options }
       )
     })
   ]
-};
+});
 
 // Through the HTTP handler, so each test sees what a browser would: fetch a
 // CSRF token, then post the form.
-async function signIn(password = PASSWORD) {
+async function signIn(
+  password = PASSWORD,
+  {
+    config = makeConfig(),
+    email = 'ada@example.test',
+    headers = {
+      'x-forwarded-for': '203.0.113.7, 10.0.0.1',
+      'user-agent': 'Mozilla/5.0 (test)'
+    } as Record<string, string>
+  } = {}
+) {
   const csrf = await Auth(new Request('http://localhost/auth/csrf'), config);
   const { csrfToken } = await csrf.json();
   const cookie = csrf.headers
@@ -57,15 +69,10 @@ async function signIn(password = PASSWORD) {
       method: 'POST',
       headers: {
         'content-type': 'application/x-www-form-urlencoded',
-        'x-forwarded-for': '203.0.113.7, 10.0.0.1',
-        'user-agent': 'Mozilla/5.0 (test)',
+        ...headers,
         cookie
       },
-      body: new URLSearchParams({
-        csrfToken,
-        email: 'ada@example.test',
-        password
-      })
+      body: new URLSearchParams({ csrfToken, email, password })
     }),
     config
   );
@@ -126,4 +133,31 @@ test('refuses to start without an API key', () => {
 test('tells LoginLlama which integration sent the check', async () => {
   await signIn();
   assert.equal(source, 'authjs-loginllama');
+});
+
+test('skips the check when the sign-in has no email', async () => {
+  const { sessionSet } = await signIn(PASSWORD, { email: '' });
+  assert.equal(sessionSet, true);
+  assert.deepEqual(calls, []);
+});
+
+test('fails open when LoginLlama answers with an error status', async () => {
+  score = 'error';
+  const { sessionSet } = await signIn();
+  assert.equal(sessionSet, true);
+});
+
+test('refuses at a custom blockAt and lets lower scores through', async () => {
+  const config = makeConfig({ blockAt: 5 });
+  score = 5;
+  assert.equal((await signIn(PASSWORD, { config })).sessionSet, false);
+  score = 4;
+  assert.equal((await signIn(PASSWORD, { config })).sessionSet, true);
+});
+
+test('sends the check without ip address or user agent when the request has none', async () => {
+  await signIn(PASSWORD, { headers: {} });
+  assert.equal(calls.length, 1);
+  assert.equal('ip_address' in calls[0], false);
+  assert.equal('user_agent' in calls[0], false);
 });

@@ -14,7 +14,11 @@
   ],
   "scripts": {
     "build": "tsc",
+    "lint": "oxlint --deny-warnings src",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
     "test": "node --test src/*.test.ts",
+    "test:coverage": "node --test --experimental-test-coverage --test-coverage-exclude='src/**/*.test.ts' --test-coverage-lines=75 --test-coverage-branches=75 --test-coverage-functions=75 src/*.test.ts",
     "prepublishOnly": "pnpm test && pnpm build"
   },
   "keywords": [
@@ -46,6 +50,8 @@
   "devDependencies": {
     "@auth/core": "^0.41.3",
     "@types/node": "^22.20.5",
+    "oxlint": "^1.94.0",
+    "prettier": "^3.10.1",
     "typescript": "^5.9.3"
   },
   "packageManager": "pnpm@11.10.0"
